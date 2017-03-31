@@ -1,0 +1,9 @@
+apply plugin: 'java'
+
+group = 'com.example'
+version = '1.0.0-SNAPSHOT'
+
+
+wrapper {
+    gradleVersion = '3.4.1'
+}
