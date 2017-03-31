@@ -1,0 +1,16 @@
+apply plugin: 'checkstyle'
+apply plugin: 'findbugs'
+apply plugin: 'pmd'
+
+checkstyle {
+	ignoreFailures = true
+}
+
+findbugs {
+	ignoreFailures = true
+	effort = "max"
+}
+
+pmd {
+	ignoreFailures = true
+}

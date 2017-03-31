@@ -79,8 +79,24 @@ pipeline {
             }
         }
 
+        stage('Prepare Analysis') {
+            agent { docker {
+                image 'openjdk:8u121-jdk'
+                reuseNode true
+            } }
+            when { expression { ENVIRONMENT != 'live' } }
+            steps {
+                sh([
+                        "./gradlew",
+                        "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                        "--no-daemon",
+                        "--stacktrace",
+                        "demo:testClasses"
+                ].join(' '))
+            }
+        }
 
-        stage('Check') {
+        stage('Analysis') {
             agent { docker {
                 image 'openjdk:8u121-jdk'
                 reuseNode true
@@ -91,7 +107,8 @@ pipeline {
                     "Unit tests": {
                         sh([
                                 "./gradlew",
-                                "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                                "--gradle-user-home=.gradle/home-local",
+                                "--no-daemon",
                                 "--stacktrace",
                                 "demo:test"
                         ].join(' '))
@@ -101,7 +118,8 @@ pipeline {
                     "Checkstyle": {
                         sh([
                                 "./gradlew",
-                                "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                                "--gradle-user-home=.gradle/home-local",
+                                "--no-daemon",
                                 "--stacktrace",
                                 "demo:checkstyleMain demo:checkstyleTest"
                         ].join(' '))
@@ -111,7 +129,8 @@ pipeline {
                     "Findbugs": {
                         sh([
                                 "./gradlew",
-                                "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                                "--gradle-user-home=.gradle/home-local",
+                                "--no-daemon",
                                 "--stacktrace",
                                 "demo:findbugsMain demo:findbugsTest"
                         ].join(' '))
@@ -121,7 +140,8 @@ pipeline {
                     "PMD": {
                         sh([
                                 "./gradlew",
-                                "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                                "--gradle-user-home=.gradle/home-local",
+                                "--no-daemon",
                                 "--stacktrace",
                                 "demo:pmdMain demo:pmdTest"
                         ].join(' '))
@@ -129,6 +149,7 @@ pipeline {
                         step([$class: 'PmdPublisher', pattern: 'demo/build/reports/pmd/*.xml', unHealthy: ''])
                     },
                 )
+                //step([$class: 'AnalysisPublisher'])
             }
         }
 
@@ -171,7 +192,6 @@ pipeline {
 
     post {
         success {
-            step([$class: 'AnalysisPublisher'])
 
             node('master') {
                 unstash name: 'app'
@@ -180,16 +200,15 @@ pipeline {
                     onlyIfSuccessful: true
             }
 
-            //slackSend \
-            //    message: "배포 성공: ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)",
-            //        color: "good"
+            slackSend \
+                message: "배포 성공: ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)",
+                    color: "good"
         }
 
         failure {
-            echo 'fail'
-            //slackSend \
-            //    message: "빌드 실패: ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)",
-            //        color: "danger"
+            slackSend \
+                message: "빌드 실패: ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)",
+                    color: "danger"
         }
     }
 
