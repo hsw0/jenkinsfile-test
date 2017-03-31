@@ -30,6 +30,7 @@ pipeline {
             }
         }
 
+
         stage ('Checkout') {
             agent any
             steps {
@@ -57,17 +58,45 @@ pipeline {
             }
         }
 
+
         stage('Build') {
             agent { docker 'openjdk:8u121-jdk' }
             steps {
-                sh 'date > a.out'
-                stash name: 'app', includes: "a.out"
+                sh './gradlew --version'
+
+                sh([
+                        "./gradlew",
+                        "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                        "--no-daemon",
+                        "--stacktrace",
+                        "clean demo:assemble"
+                ].join(' '))
+
+                stash name: 'app', includes: "demo/build/libs/*.jar"
+            }
+        }
+
+
+        stage('Tests') {
+            agent { docker 'openjdk:8u121-jdk' }
+            when { expression { ENVIRONMENT != 'live' } }
+            steps {
+                sh([
+                        "./gradlew",
+                        "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                        "--no-daemon",
+                        "--stacktrace",
+                        "demo:test"
+                ].join(' '))
+
+                junit allowEmptyResults: true, testResults: 'demo/build/test-results/test/*.xml'
             }
         }
 
 
         stage('Deploy') {
             agent any
+            when { expression { ENVIRONMENT != 'test' } }
             steps {
                 lock("deploy:testing:${ENVIRONMENT}") {
                     unstash name: 'app'
@@ -81,10 +110,17 @@ pipeline {
     post {
         success {
             node('master') {
-               unstash name: 'app'
-               archiveArtifacts \
-                   artifacts: "a.out",
-                   onlyIfSuccessful: true
+                unstash name: 'app'
+                archiveArtifacts \
+                    artifacts: "demo/build/libs/*.jar",
+                    onlyIfSuccessful: true
+
+                // Add deploy tag
+                sh 'git tag -a -m "${JOB_NAME} b${BUILD_NUMBER}" "deploy/${BUILD_TAG}"'
+
+                sshagent([scm.userRemoteConfigs[0].credentialsId]) {
+                    sh 'git push origin "deploy/${BUILD_TAG}"'
+                }
             }
 
             echo "number: ${currentBuild.number}"
