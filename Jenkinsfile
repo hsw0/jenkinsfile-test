@@ -30,6 +30,7 @@ pipeline {
             }
         }
 
+
         stage ('Checkout') {
             agent any
             steps {
@@ -57,17 +58,84 @@ pipeline {
             }
         }
 
+
         stage('Build') {
-            agent { docker 'openjdk:8u121-jdk' }
+            agent { docker {
+                image 'openjdk:8u121-jdk'
+                reuseNode true
+            } }
             steps {
-                sh 'date > a.out'
-                stash name: 'app', includes: "a.out"
+                sh './gradlew --version'
+
+                sh([
+                        "./gradlew",
+                        "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                        "--no-daemon",
+                        "--stacktrace",
+                        "clean demo:assemble"
+                ].join(' '))
+
+                stash name: 'app', includes: "demo/build/libs/*.jar"
+            }
+        }
+
+
+        stage('Check') {
+            agent { docker {
+                image 'openjdk:8u121-jdk'
+                reuseNode true
+            } }
+            when { expression { ENVIRONMENT != 'live' } }
+            steps {
+                parallel (
+                    "Unit tests": {
+                        sh([
+                                "./gradlew",
+                                "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                                "--stacktrace",
+                                "demo:test"
+                        ].join(' '))
+
+                        junit testResults: 'demo/build/test-results/test/*.xml', allowEmptyResults: true
+                    },
+                    "Checkstyle": {
+                        sh([
+                                "./gradlew",
+                                "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                                "--stacktrace",
+                                "demo:checkstyleMain demo:checkstyleTest"
+                        ].join(' '))
+
+                        step([$class: 'CheckStylePublisher', pattern: 'demo/build/reports/checkstyle/*.xml'])
+                    },
+                    "Findbugs": {
+                        sh([
+                                "./gradlew",
+                                "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                                "--stacktrace",
+                                "demo:findbugsMain demo:findbugsTest"
+                        ].join(' '))
+
+                        step([$class: 'FindBugsPublisher', pattern: 'demo/build/reports/findbugs/*.xml', unHealthy: ''])
+                    },
+                    "PMD": {
+                        sh([
+                                "./gradlew",
+                                "--gradle-user-home=.gradle/home-local",  // per-project gradle home
+                                "--stacktrace",
+                                "demo:pmdMain demo:pmdTest"
+                        ].join(' '))
+
+                        step([$class: 'PmdPublisher', pattern: 'demo/build/reports/pmd/*.xml', unHealthy: ''])
+                    },
+                )
             }
         }
 
 
         stage('Deploy') {
             agent any
+            when { expression { ENVIRONMENT != 'test' } }
             steps {
                 lock("deploy:testing:${ENVIRONMENT}") {
                     unstash name: 'app'
@@ -75,22 +143,43 @@ pipeline {
                 } /*lock*/
             } /* steps */
         } /* stage */
+
+
+        stage('Tag') {
+            agent any
+            when { expression { ENVIRONMENT == 'live' } }
+            steps {
+                // Add deploy tag
+                sh 'git tag -a -m "${JOB_NAME} b${BUILD_NUMBER}" "deploy/${BUILD_TAG}"'
+
+                sshagent([scm.userRemoteConfigs[0].credentialsId]) {
+                    sh 'git push origin "deploy/${BUILD_TAG}"'
+                }
+
+                // TODO: newrelic
+
+                /*
+                echo "number: ${currentBuild.number}"
+                echo "displayName: ${currentBuild.displayName}"
+                echo "description: ${currentBuild.description}"
+                echo "id: ${currentBuild.id}"
+                */
+            }
+        }
     }
 
 
     post {
         success {
+            step([$class: 'AnalysisPublisher'])
+
             node('master') {
-               unstash name: 'app'
-               archiveArtifacts \
-                   artifacts: "a.out",
-                   onlyIfSuccessful: true
+                unstash name: 'app'
+                archiveArtifacts \
+                    artifacts: "demo/build/libs/*.jar",
+                    onlyIfSuccessful: true
             }
 
-            echo "number: ${currentBuild.number}"
-            echo "displayName: ${currentBuild.displayName}"
-            echo "description: ${currentBuild.description}"
-            echo "id: ${currentBuild.id}"
             //slackSend \
             //    message: "배포 성공: ${env.JOB_NAME} ${env.BUILD_NUMBER} (<${env.BUILD_URL}|Open>)",
             //        color: "good"
